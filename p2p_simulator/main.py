@@ -184,6 +184,20 @@ class Peer:
             print(f"Peer {self.peer_id} choked peer {peer_id}")
             return True
         return False
+    
+    def set_interested(self, peer_id):
+        if peer_id in self.connected_peers:
+            self.connected_peers[peer_id]['am_interested'] = True
+            print(f"Peer {self.peer_id} interested in peer {peer_id}")
+            return True
+        return False
+    
+    def set_not_interested(self, peer_id):
+        if peer_id in self.connected_peers:
+            self.connected_peers[peer_id]['am_interested'] = False
+            print(f"Peer {self.peer_id} not interested in peer {peer_id}")
+            return True
+        return False
 
 # Simplified Simulator class
 class Simulator:
@@ -228,25 +242,12 @@ class Simulator:
                 # Connect to these peers
                 for other_id in other_peers:
                     peer.connect_to_peer(other_id)
-                    
-                    # Also schedule piece requests if the other peer is a seed
+                    # Express interest in peers that have pieces
                     if self.peers[other_id].is_seed:
-                        # Randomly request a few pieces
-                        for _ in range(3):
-                            piece_index = random.randint(0, peer.num_pieces - 1)
-                            # Schedule a piece request
-                            self.schedule_event(
-                                self.current_time + random.uniform(1, 5),
-                                "REQUEST_PIECE",
-                                {
-                                    'requester': peer_id,
-                                    'provider': other_id,
-                                    'piece_index': piece_index
-                                }
-                            )
+                        peer.set_interested(other_id)
     
     def schedule_initial_events(self):
-        # Schedule some unchoke events
+        # Schedule unchoke events for seeds
         for peer_id, peer in self.peers.items():
             if peer.is_seed:
                 # Seeds unchoke all connected peers
@@ -259,6 +260,22 @@ class Simulator:
                             'to_peer': other_id
                         }
                     )
+        
+        # Schedule initial piece requests for leechers
+        for peer_id, peer in self.peers.items():
+            if not peer.is_seed:
+                for other_id in peer.connected_peers:
+                    if self.peers[other_id].is_seed:
+                        # Schedule a piece request event
+                        self.schedule_event(
+                            self.current_time + random.uniform(2, 5),
+                            "REQUEST_PIECE",
+                            {
+                                'requester': peer_id,
+                                'provider': other_id,
+                                'piece_index': random.randint(0, peer.num_pieces - 1)
+                            }
+                        )
         
         # Schedule a stats print event
         self.schedule_event(10, "PRINT_STATS", {})
@@ -316,10 +333,10 @@ class Simulator:
             requester = self.peers[requester_id]
             provider = self.peers[provider_id]
             
-            # Check if the requester has requested this piece from provider
-            if requester.request_piece(provider_id, piece_index):
-                # If the provider has the piece, deliver it
-                if provider.bitfield.has_piece(piece_index):
+            # Check if the provider is a seed or has the piece
+            if provider.bitfield.has_piece(piece_index):
+                # Check if the requester has requested this piece from provider
+                if requester.request_piece(provider_id, piece_index):
                     # Schedule piece delivery with a small delay
                     self.schedule_event(
                         self.current_time + random.uniform(0.2, 1.0),
@@ -361,8 +378,24 @@ class Simulator:
         to_peer_id = data['to_peer']
         
         if from_peer_id in self.peers:
-            peer = self.peers[from_peer_id]
-            peer.unchoke_peer(to_peer_id)
+            from_peer = self.peers[from_peer_id]
+            if from_peer.unchoke_peer(to_peer_id):
+                # If the other peer is interested, they can start requesting pieces
+                if to_peer_id in self.peers:
+                    to_peer = self.peers[to_peer_id]
+                    if to_peer_id in from_peer.connected_peers and from_peer.connected_peers[to_peer_id].get('am_interested', False):
+                        # Schedule a piece request
+                        missing_pieces = to_peer.bitfield.get_missing_pieces()
+                        if missing_pieces:
+                            self.schedule_event(
+                                self.current_time + random.uniform(0.2, 1.0),
+                                "REQUEST_PIECE",
+                                {
+                                    'requester': to_peer_id,
+                                    'provider': from_peer_id,
+                                    'piece_index': random.choice(missing_pieces)
+                                }
+                            )
     
     def handle_choke_peer(self, data):
         from_peer_id = data['from_peer']
