@@ -1,439 +1,181 @@
 """
-BitTorrent Simulator - Simplified Main Entry Point
-
-This script provides a simplified entry point for the BitTorrent simulator
-without requiring complex package imports.
+Simple BitTorrent Simulator - A direct, no-frills implementation
 """
 
-import os
-import time
 import random
+import time
 
-# Simple configuration class
-class Config:
-    def __init__(self):
-        self.piece_size = 1024
-        self.file_name = "sample_file.dat"
-        self.max_connections = 5
-        self.handshake_header = "P2PFILESHARINGPROJ"
-
-# Simple BitField class
-class BitField:
-    def __init__(self, num_pieces):
-        self.pieces = [False] * num_pieces
+class Peer:
+    def __init__(self, peer_id, is_seed=False, num_pieces=10):
+        self.peer_id = peer_id
+        self.is_seed = is_seed
         self.num_pieces = num_pieces
-    
-    def has_piece(self, piece_index):
-        if 0 <= piece_index < self.num_pieces:
-            return self.pieces[piece_index]
+        self.pieces = [is_seed] * num_pieces  # True if we have the piece
+        self.connected_peers = []  # List of connected peer IDs
+        self.unchoked_peers = []  # List of peers we've unchoked
+        self.interested_in = []  # List of peers we're interested in
+        
+    def connect_to_peer(self, peer_id):
+        if peer_id not in self.connected_peers:
+            self.connected_peers.append(peer_id)
+            print(f"Peer {self.peer_id} connected to {peer_id}")
+            return True
         return False
     
-    def set_piece(self, piece_index, has_piece=True):
-        if 0 <= piece_index < self.num_pieces:
-            self.pieces[piece_index] = has_piece
-    
-    def get_completed_count(self):
-        return sum(1 for piece in self.pieces if piece)
-    
-    def is_complete(self):
-        return all(self.pieces)
+    def has_piece(self, piece_index):
+        return self.pieces[piece_index]
     
     def get_missing_pieces(self):
         return [i for i, has_piece in enumerate(self.pieces) if not has_piece]
     
-    def get_owned_pieces(self):
-        return [i for i, has_piece in enumerate(self.pieces) if has_piece]
-
-# Simple Event class
-class Event:
-    def __init__(self, time, event_type, data=None):
-        self.time = time
-        self.event_type = event_type
-        self.data = data or {}
-    
-    def __lt__(self, other):
-        return self.time < other.time
-
-# Simple EventQueue
-class EventQueue:
-    def __init__(self):
-        self.events = []
-    
-    def push(self, event):
-        self.events.append(event)
-        self.events.sort()  # Sort by time
-    
-    def pop(self):
-        if self.events:
-            return self.events.pop(0)
-        return None
-    
-    def is_empty(self):
-        return len(self.events) == 0
-
-# Simplified Tracker class
-class Tracker:
-    def __init__(self, config):
-        self.config = config
-        self.peers = {}  # peer_id -> info
-        self.num_pieces = 10  # Default value
-    
-    def register_peer(self, peer_id, is_seed=False):
-        self.peers[peer_id] = {
-            'is_seed': is_seed,
-            'pieces': list(range(self.num_pieces)) if is_seed else []
-        }
-        print(f"Registered peer {peer_id} as {'seed' if is_seed else 'leecher'}")
-    
-    def update_peer(self, peer_id, pieces):
-        if peer_id in self.peers:
-            self.peers[peer_id]['pieces'] = pieces
-            if len(pieces) == self.num_pieces:
-                self.peers[peer_id]['is_seed'] = True
-                print(f"Peer {peer_id} has become a seed")
-    
-    def get_peers(self, requesting_peer_id, max_peers=3):
-        other_peers = [pid for pid in self.peers if pid != requesting_peer_id]
-        if not other_peers:
-            return []
-        
-        # Prioritize seeds
-        seeds = [pid for pid in other_peers if self.peers[pid]['is_seed']]
-        non_seeds = [pid for pid in other_peers if not self.peers[pid]['is_seed']]
-        
-        result = []
-        # Add seeds first
-        result.extend(seeds[:max_peers])
-        
-        # Add non-seeds if we have space
-        remaining = max_peers - len(result)
-        if remaining > 0:
-            result.extend(non_seeds[:remaining])
-        
-        return result
-
-# Simplified Peer class
-class Peer:
-    def __init__(self, peer_id, config, tracker, is_seed=False):
-        self.peer_id = peer_id
-        self.config = config
-        self.tracker = tracker
-        self.is_seed = is_seed
-        
-        # Initialize bitfield
-        self.num_pieces = tracker.num_pieces
-        self.bitfield = BitField(self.num_pieces)
-        
-        # If seed, mark all pieces as available
-        if is_seed:
-            for i in range(self.num_pieces):
-                self.bitfield.set_piece(i, True)
-        
-        # Connected peers
-        self.connected_peers = {}  # peer_id -> peer info
-        
-        # Register with tracker
-        self.tracker.register_peer(peer_id, is_seed)
-    
-    def connect_to_peer(self, other_peer_id):
-        if other_peer_id not in self.connected_peers:
-            print(f"Peer {self.peer_id} connecting to peer {other_peer_id}")
-            self.connected_peers[other_peer_id] = {
-                'pieces': [],
-                'am_interested': False,
-                'am_choking': True,
-                'peer_interested': False,
-                'peer_choking': True
-            }
-            return True
-        return False
-    
-    def request_piece(self, from_peer_id, piece_index):
-        if (from_peer_id in self.connected_peers and 
-                not self.connected_peers[from_peer_id]['peer_choking']):
-            print(f"Peer {self.peer_id} requesting piece {piece_index} from {from_peer_id}")
-            return True
-        return False
+    def get_progress(self):
+        return sum(self.pieces), self.num_pieces
     
     def receive_piece(self, piece_index):
-        if not self.bitfield.has_piece(piece_index):
-            self.bitfield.set_piece(piece_index, True)
+        if not self.pieces[piece_index]:
+            self.pieces[piece_index] = True
             print(f"Peer {self.peer_id} received piece {piece_index}")
-            
-            # Update tracker
-            self.tracker.update_peer(self.peer_id, self.bitfield.get_owned_pieces())
-            
-            # Check if download is complete
-            if self.bitfield.is_complete():
+            if all(self.pieces):
                 self.is_seed = True
-                print(f"Peer {self.peer_id} has completed the download and is now a seed")
-            
+                print(f"Peer {self.peer_id} is now a seed (has all pieces)")
             return True
         return False
+    
+    def has_all_pieces(self):
+        return all(self.pieces)
     
     def unchoke_peer(self, peer_id):
-        if peer_id in self.connected_peers:
-            self.connected_peers[peer_id]['am_choking'] = False
-            print(f"Peer {self.peer_id} unchoked peer {peer_id}")
+        if peer_id not in self.unchoked_peers:
+            self.unchoked_peers.append(peer_id)
+            print(f"Peer {self.peer_id} unchoked {peer_id}")
             return True
         return False
     
-    def choke_peer(self, peer_id):
-        if peer_id in self.connected_peers:
-            self.connected_peers[peer_id]['am_choking'] = True
-            print(f"Peer {self.peer_id} choked peer {peer_id}")
-            return True
-        return False
-    
-    def set_interested(self, peer_id):
-        if peer_id in self.connected_peers:
-            self.connected_peers[peer_id]['am_interested'] = True
-            print(f"Peer {self.peer_id} interested in peer {peer_id}")
-            return True
-        return False
-    
-    def set_not_interested(self, peer_id):
-        if peer_id in self.connected_peers:
-            self.connected_peers[peer_id]['am_interested'] = False
-            print(f"Peer {self.peer_id} not interested in peer {peer_id}")
+    def express_interest(self, peer_id):
+        if peer_id not in self.interested_in:
+            self.interested_in.append(peer_id)
+            print(f"Peer {self.peer_id} expressed interest in {peer_id}")
             return True
         return False
 
-# Simplified Simulator class
 class Simulator:
-    def __init__(self, config, num_seeds=1, num_leechers=5):
-        self.config = config
-        self.current_time = 0
-        
-        # Create event queue
-        self.event_queue = EventQueue()
-        
-        # Create tracker
-        self.tracker = Tracker(config)
-        
-        # Create peers
+    def __init__(self, num_seeds=1, num_leechers=5, num_pieces=10):
         self.peers = {}
+        self.current_time = 0
+        self.num_pieces = num_pieces
         
         # Create seeds
         for i in range(num_seeds):
             peer_id = f"SEED-{i+1}"
-            peer = Peer(peer_id, config, self.tracker, is_seed=True)
+            peer = Peer(peer_id, is_seed=True, num_pieces=num_pieces)
             self.peers[peer_id] = peer
         
         # Create leechers
         for i in range(num_leechers):
             peer_id = f"PEER-{i+1}"
-            peer = Peer(peer_id, config, self.tracker, is_seed=False)
+            peer = Peer(peer_id, is_seed=False, num_pieces=num_pieces)
             self.peers[peer_id] = peer
-        
-        # Initialize the connections
-        self.initialize_connections()
-        
-        # Schedule initial events
-        self.schedule_initial_events()
     
-    def initialize_connections(self):
-        # Each leecher connects to a few other peers
-        for peer_id, peer in self.peers.items():
-            if not peer.is_seed:
-                # Get peers from tracker
-                other_peers = self.tracker.get_peers(peer_id, max_peers=2)
+    def setup_connections(self):
+        """Connect leechers to seeds and other peers."""
+        # For each leecher
+        leechers = [p for p_id, p in self.peers.items() if not p.is_seed]
+        seeds = [p for p_id, p in self.peers.items() if p.is_seed]
+        
+        for leecher in leechers:
+            # Connect to all seeds
+            for seed in seeds:
+                leecher.connect_to_peer(seed.peer_id)
+                seed.connect_to_peer(leecher.peer_id)
                 
-                # Connect to these peers
-                for other_id in other_peers:
-                    peer.connect_to_peer(other_id)
-                    # Express interest in peers that have pieces
-                    if self.peers[other_id].is_seed:
-                        peer.set_interested(other_id)
-    
-    def schedule_initial_events(self):
-        # Schedule unchoke events for seeds
-        for peer_id, peer in self.peers.items():
-            if peer.is_seed:
-                # Seeds unchoke all connected peers
-                for other_id in peer.connected_peers:
-                    self.schedule_event(
-                        self.current_time + random.uniform(0.5, 2),
-                        "UNCHOKE_PEER",
-                        {
-                            'from_peer': peer_id,
-                            'to_peer': other_id
-                        }
-                    )
-        
-        # Schedule initial piece requests for leechers
-        for peer_id, peer in self.peers.items():
-            if not peer.is_seed:
-                for other_id in peer.connected_peers:
-                    if self.peers[other_id].is_seed:
-                        # Schedule a piece request event
-                        self.schedule_event(
-                            self.current_time + random.uniform(2, 5),
-                            "REQUEST_PIECE",
-                            {
-                                'requester': peer_id,
-                                'provider': other_id,
-                                'piece_index': random.randint(0, peer.num_pieces - 1)
-                            }
-                        )
-        
-        # Schedule a stats print event
-        self.schedule_event(10, "PRINT_STATS", {})
-    
-    def schedule_event(self, time, event_type, data):
-        event = Event(time, event_type, data)
-        self.event_queue.push(event)
-    
-    def run(self, max_time=30):
-        print(f"Starting simulation with {len(self.peers)} peers")
-        print(f"- {sum(1 for p in self.peers.values() if p.is_seed)} seeds")
-        print(f"- {sum(1 for p in self.peers.values() if not p.is_seed)} leechers")
-        
-        while not self.event_queue.is_empty() and self.current_time < max_time:
-            event = self.event_queue.pop()
-            self.current_time = event.time
+                # Express interest in the seed
+                leecher.express_interest(seed.peer_id)
+                
+                # Seeds unchoke all peers
+                seed.unchoke_peer(leecher.peer_id)
             
-            self.process_event(event)
+            # Connect to some other leechers
+            other_leechers = [l for l in leechers if l.peer_id != leecher.peer_id]
+            for other in random.sample(other_leechers, min(2, len(other_leechers))):
+                leecher.connect_to_peer(other.peer_id)
+                other.connect_to_peer(leecher.peer_id)
+    
+    def run_simulation(self, max_time=100):
+        """Run the BitTorrent simulation."""
+        print("\nSetting up connections...")
+        self.setup_connections()
+        
+        print("\nStarting simulation...")
+        print(f"Initial state: {sum(1 for p in self.peers.values() if p.is_seed)} seeds, {sum(1 for p in self.peers.values() if not p.is_seed)} leechers")
+        
+        # Run the simulation for max_time steps
+        for t in range(1, max_time + 1):
+            self.current_time = t
             
-            # Check if all peers are complete
+            # Each leecher tries to download pieces
+            for peer_id, peer in self.peers.items():
+                # Skip completed peers
+                if peer.has_all_pieces():
+                    continue
+                
+                # Try to get a piece from an unchoked peer we're interested in
+                for target_id in peer.interested_in:
+                    target_peer = self.peers[target_id]
+                    
+                    # Check if we're unchoked by this peer
+                    if peer_id in target_peer.unchoked_peers:
+                        # Find a piece we need that the target has
+                        missing_pieces = peer.get_missing_pieces()
+                        if missing_pieces:
+                            random.shuffle(missing_pieces)  # Randomize for now (should be rarest-first)
+                            
+                            for piece_idx in missing_pieces:
+                                if target_peer.has_piece(piece_idx):
+                                    # Download the piece
+                                    peer.receive_piece(piece_idx)
+                                    
+                                    # A peer that gets a piece becomes interesting to others
+                                    for other_id in peer.connected_peers:
+                                        other_peer = self.peers[other_id]
+                                        if not other_peer.has_piece(piece_idx):
+                                            other_peer.express_interest(peer_id)
+                                    
+                                    # We only download one piece per time step
+                                    break
+            
+            # Every 10 time steps, print stats
+            if t % 10 == 0 or t == 1:
+                self.print_stats()
+            
+            # If all peers are seeds, end simulation
             if all(peer.is_seed for peer in self.peers.values()):
-                print(f"Simulation complete at time {self.current_time:.2f}: All peers are seeds")
+                print(f"\nAll peers have completed the download at time {t}")
                 break
         
-        print(f"Simulation ended at time {self.current_time:.2f}")
+        # Final stats
+        print("\nFinal simulation state:")
         self.print_stats()
     
-    def process_event(self, event):
-        event_type = event.event_type
-        data = event.data
-        
-        if event_type == "REQUEST_PIECE":
-            self.handle_request_piece(data)
-        
-        elif event_type == "DELIVER_PIECE":
-            self.handle_deliver_piece(data)
-        
-        elif event_type == "UNCHOKE_PEER":
-            self.handle_unchoke_peer(data)
-        
-        elif event_type == "CHOKE_PEER":
-            self.handle_choke_peer(data)
-        
-        elif event_type == "PRINT_STATS":
-            self.print_stats()
-            # Schedule next stats print
-            self.schedule_event(self.current_time + 10, "PRINT_STATS", {})
-    
-    def handle_request_piece(self, data):
-        requester_id = data['requester']
-        provider_id = data['provider']
-        piece_index = data['piece_index']
-        
-        if (requester_id in self.peers and provider_id in self.peers):
-            requester = self.peers[requester_id]
-            provider = self.peers[provider_id]
-            
-            # Check if the provider is a seed or has the piece
-            if provider.bitfield.has_piece(piece_index):
-                # Check if the requester has requested this piece from provider
-                if requester.request_piece(provider_id, piece_index):
-                    # Schedule piece delivery with a small delay
-                    self.schedule_event(
-                        self.current_time + random.uniform(0.2, 1.0),
-                        "DELIVER_PIECE",
-                        {
-                            'from_peer': provider_id,
-                            'to_peer': requester_id,
-                            'piece_index': piece_index
-                        }
-                    )
-    
-    def handle_deliver_piece(self, data):
-        from_peer_id = data['from_peer']
-        to_peer_id = data['to_peer']
-        piece_index = data['piece_index']
-        
-        if to_peer_id in self.peers:
-            to_peer = self.peers[to_peer_id]
-            # Deliver the piece
-            if to_peer.receive_piece(piece_index):
-                # Schedule more piece requests if not complete
-                if not to_peer.is_seed:
-                    missing_pieces = to_peer.bitfield.get_missing_pieces()
-                    if missing_pieces:
-                        # Request another piece
-                        new_piece = random.choice(missing_pieces)
-                        self.schedule_event(
-                            self.current_time + random.uniform(0.5, 2.0),
-                            "REQUEST_PIECE",
-                            {
-                                'requester': to_peer_id,
-                                'provider': from_peer_id,
-                                'piece_index': new_piece
-                            }
-                        )
-    
-    def handle_unchoke_peer(self, data):
-        from_peer_id = data['from_peer']
-        to_peer_id = data['to_peer']
-        
-        if from_peer_id in self.peers:
-            from_peer = self.peers[from_peer_id]
-            if from_peer.unchoke_peer(to_peer_id):
-                # If the other peer is interested, they can start requesting pieces
-                if to_peer_id in self.peers:
-                    to_peer = self.peers[to_peer_id]
-                    if to_peer_id in from_peer.connected_peers and from_peer.connected_peers[to_peer_id].get('am_interested', False):
-                        # Schedule a piece request
-                        missing_pieces = to_peer.bitfield.get_missing_pieces()
-                        if missing_pieces:
-                            self.schedule_event(
-                                self.current_time + random.uniform(0.2, 1.0),
-                                "REQUEST_PIECE",
-                                {
-                                    'requester': to_peer_id,
-                                    'provider': from_peer_id,
-                                    'piece_index': random.choice(missing_pieces)
-                                }
-                            )
-    
-    def handle_choke_peer(self, data):
-        from_peer_id = data['from_peer']
-        to_peer_id = data['to_peer']
-        
-        if from_peer_id in self.peers:
-            peer = self.peers[from_peer_id]
-            peer.choke_peer(to_peer_id)
-    
     def print_stats(self):
-        print(f"\nSimulation Stats at time {self.current_time:.2f}:")
-        seeds = sum(1 for peer in self.peers.values() if peer.is_seed)
-        leechers = len(self.peers) - seeds
-        print(f"- Seeds: {seeds}")
-        print(f"- Leechers: {leechers}")
+        """Print the current state of the simulation."""
+        print(f"\nTime: {self.current_time}")
+        print(f"Seeds: {sum(1 for p in self.peers.values() if p.is_seed)}")
+        print(f"Leechers: {sum(1 for p in self.peers.values() if not p.is_seed)}")
         
-        if leechers > 0:
-            print("\nLeecher Progress:")
-            for peer_id, peer in self.peers.items():
-                if not peer.is_seed:
-                    pieces = peer.bitfield.get_completed_count()
-                    total = peer.num_pieces
-                    percentage = (pieces / total) * 100
-                    print(f"- Peer {peer_id}: {pieces}/{total} pieces ({percentage:.1f}%)")
+        # Print progress for each leecher
+        leechers = [(p_id, p) for p_id, p in self.peers.items() if not p.is_seed]
+        if leechers:
+            print("\nLeecher progress:")
+            for peer_id, peer in leechers:
+                pieces, total = peer.get_progress()
+                percentage = (pieces / total) * 100
+                print(f"- {peer_id}: {pieces}/{total} pieces ({percentage:.1f}%)")
 
 def main():
-    """Run a simplified BitTorrent simulation."""
-    # Create configuration
-    config = Config()
-    
-    # Create and run simulator
-    print("Initializing BitTorrent simulator...")
-    sim = Simulator(config, num_seeds=1, num_leechers=5)
-    
-    print("\nRunning simulation...")
-    sim.run(max_time=100)
-    
-    print("\nSimulation complete!")
+    """Run the BitTorrent simulation."""
+    # Create and run the simulator
+    sim = Simulator(num_seeds=1, num_leechers=5, num_pieces=10)
+    sim.run_simulation(max_time=100)
 
 if __name__ == "__main__":
     main()
