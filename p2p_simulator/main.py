@@ -1,11 +1,35 @@
 """
 Final BitTorrent Simulator with LRF and Tit-for-Tat algorithms
-- Simplified to ensure piece transfer works correctly
+- Saves output to paste.txt for analysis
 """
 
 import random
 import time
 from collections import defaultdict
+import sys
+import os
+
+# Set up logging to file
+log_file = "paste.txt"
+
+# Clear the log file if it exists
+with open(log_file, 'w') as f:
+    f.write("BitTorrent Simulator Log\n")
+    f.write("======================\n\n")
+
+# Create a custom print function that writes to both console and file
+original_print = print
+def tee_print(*args, **kwargs):
+    # Print to console
+    original_print(*args, **kwargs)
+    
+    # Print to file
+    with open(log_file, 'a') as f:
+        kwargs['file'] = f
+        original_print(*args, **kwargs)
+
+# Replace the built-in print function with our custom function
+print = tee_print
 
 class Peer:
     def __init__(self, peer_id, is_seed=False, num_pieces=10):
@@ -326,8 +350,12 @@ class Simulator:
 
 def main():
     # Create and run simulator
+    print("BitTorrent Simulator - Logging to paste.txt")
     sim = Simulator(num_seeds=1, num_leechers=5, num_pieces=10)
     sim.run_simulation(max_time=100)
+    
+    print("\nSimulation complete!")
+    print(f"Output has been saved to {log_file}")
 
 if __name__ == "__main__":
     main()
